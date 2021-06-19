@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/anchore/syft/internal"
+
 	"github.com/anchore/stereoscope/pkg/image/docker"
 	"github.com/dustin/go-humanize"
 
@@ -395,6 +397,49 @@ func FileMetadataCatalogerStartedHandler(ctx context.Context, fr *frame.Frame, e
 
 		spin := color.Green.Sprint(completedStatus)
 		title = tileFormat.Sprint("Cataloged file metadata")
+		_, _ = io.WriteString(line, fmt.Sprintf(statusTitleTemplate, spin, title))
+	}()
+	return err
+}
+
+// FileIndexingStartedHandler shows the intermittent indexing progress from a directory resolver.
+// nolint:dupl
+func FileIndexingStartedHandler(ctx context.Context, fr *frame.Frame, event partybus.Event, wg *sync.WaitGroup) error {
+	path, prog, err := syftEventParsers.ParseFileIndexingStarted(event)
+	if err != nil {
+		return fmt.Errorf("bad %s event: %w", event.Type, err)
+	}
+
+	line, err := fr.Append()
+	if err != nil {
+		return err
+	}
+	wg.Add(1)
+
+	_, spinner := startProcess()
+	stream := progress.Stream(ctx, prog, interval)
+	title := tileFormat.Sprintf("Indexing %s", path)
+
+	formatFn := func(p progress.Progress) {
+		spin := color.Magenta.Sprint(spinner.Next())
+		if err != nil {
+			_, _ = io.WriteString(line, fmt.Sprintf("Error: %+v", err))
+		} else {
+			auxInfo := auxInfoFormat.Sprintf("[file: %s]", internal.TruncateMiddleEllipsis(prog.Stage(), 100))
+			_, _ = io.WriteString(line, fmt.Sprintf(statusTitleTemplate+"%s", spin, title, auxInfo))
+		}
+	}
+
+	go func() {
+		defer wg.Done()
+
+		formatFn(progress.Progress{})
+		for p := range stream {
+			formatFn(p)
+		}
+
+		spin := color.Green.Sprint(completedStatus)
+		title = tileFormat.Sprintf("Indexed %s", path)
 		_, _ = io.WriteString(line, fmt.Sprintf(statusTitleTemplate, spin, title))
 	}()
 	return err
